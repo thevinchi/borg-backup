@@ -1,0 +1,409 @@
+#!/usr/bin/env bash
+set -eo pipefail
+
+
+CONFIG_FOLDER="$HOME/.config/borg-backup"
+CONFIG_FILE="$CONFIG_FOLDER/borg-backup.conf"
+
+GPG_KEY_NAME="$USER@borg-backup"
+export PASSWORD_STORE_DIR="$CONFIG_FOLDER/.password-store"
+
+
+DOC="borg-backup - Backup utility using BorgBackup
+
+Usage:
+  borg-backup backup
+  borg-backup ls [<archive>] [<path>...]
+  borg-backup rm <archive>
+  borg-backup restore <archive> <src> <dest>
+  borg-backup (-h | --help)
+
+Commands:
+  backup              Create a new backup archive
+  ls                  List archives or archive contents
+  rm                  Remove an archive
+  restore             Restore files from an archive
+
+Arguments:
+  <archive>           Archive name
+  <path>              Filter items in <archive> by path
+  <src>               Source path to restore
+  <dest>              Destination path for restore
+
+Options:
+  -h --help           Show this help message and exit
+"
+# docopt parser below, refresh this parser with `docopt.sh borg-backup`
+# shellcheck disable=2016,2086,2317,1075,2154
+docopt() { parse() { if ${DOCOPT_DOC_CHECK:-true}; then local doc_hash;if \
+doc_hash=$(printf "%s" "$DOC" | (sha256sum 2>/dev/null || shasum -a 256)); then
+if [[ ${doc_hash:0:5} != "$digest" ]]; then stderr "The current usage doc \
+(${doc_hash:0:5}) does not match what the parser was generated with (${digest})
+Run \`docopt.sh\` to refresh the parser.";_return 70;fi;fi;fi;local root_idx=$1
+shift;params=();testdepth=0;local argv=("$@") arg i o;while [[ ${#argv[@]} -gt \
+0 ]]; do if [[ ${argv[0]} = "--" ]]; then for arg in "${argv[@]}"; do
+params+=("a:$arg");done;break;elif [[ ${argv[0]} = --* ]]; then local \
+long=${argv[0]%%=*};if ${DOCOPT_ADD_HELP:-true} && [[ $long = "--help" ]]; then
+stdout "$trimmed_doc";_return 0;elif [[ ${DOCOPT_PROGRAM_VERSION:-false} != 'f'\
+'alse' && $long = "--version" ]]; then stdout "$DOCOPT_PROGRAM_VERSION"
+_return 0;fi;local similar=() match=false;i=0;for o in "${options[@]}"; do if \
+[[ $o = *" $long "? ]]; then similar+=("$long");match=$i;break;fi;: $((i++))
+done;if [[ $match = false ]]; then i=0;for o in "${options[@]}"; do if [[ $o = \
+*" $long"*? ]]; then local long_match=${o#* };similar+=("${long_match% *}")
+match=$i;fi;: $((i++));done;fi;if [[ ${#similar[@]} -gt 1 ]]; then error \
+"${long} is not a unique prefix: ${similar[*]}?";elif [[ ${#similar[@]} -lt 1 \
+]]; then error;else if [[ ${options[$match]} = *0 ]]; then if [[ ${argv[0]} = \
+*=* ]]; then local long_match=${o#* };error "${long_match% *} must not have an \
+argument";else params+=("$match:true");argv=("${argv[@]:1}");fi;else if [[ \
+${argv[0]} = *=* ]]; then params+=("$match:${argv[0]#*=}");argv=("${argv[@]:1}")
+else if [[ ${#argv[@]} -le 1 || ${argv[1]} = '--' ]]; then error "${long} \
+requires argument";fi;params+=("$match:${argv[1]}");argv=("${argv[@]:2}");fi;fi
+fi;elif [[ ${argv[0]} = -* && ${argv[0]} != "-" ]]; then local \
+remaining=${argv[0]#-};while [[ -n $remaining ]]; do local \
+short="-${remaining:0:1}";if ${DOCOPT_ADD_HELP:-true} && [[ $short = "-h" ]]; \
+then stdout "$trimmed_doc";_return 0;fi;local matched=false
+remaining="${remaining:1}";i=0;for o in "${options[@]}"; do if [[ $o = "$short \
+"* ]]; then if [[ $o = *1 ]]; then if [[ $remaining = '' ]]; then if [[ \
+${#argv[@]} -le 1 || ${argv[1]} = '--' ]]; then error "${short} requires \
+argument";fi;params+=("$i:${argv[1]}");argv=("${argv[@]:1}");break 2;else
+params+=("$i:$remaining");break 2;fi;else params+=("$i:true");matched=true;break
+fi;fi;: $((i++));done;$matched || error;done;argv=("${argv[@]:1}");elif \
+${DOCOPT_OPTIONS_FIRST:-false}; then for arg in "${argv[@]}"; do
+params+=("a:$arg");done;break;else params+=("a:${argv[0]}")
+argv=("${argv[@]:1}");fi;done;if ! "node_$root_idx" || [ ${#params[@]} -gt 0 \
+]; then error;fi;return 0;};sequence() { local initial_params=("${params[@]}") \
+node_idx;: $((testdepth++));for node_idx in "$@"; do if ! "node_$node_idx"; then
+params=("${initial_params[@]}");: $((testdepth--));return 1;fi;done;if [[ \
+$((--testdepth)) -eq 0 ]]; then params=("${initial_params[@]}");for node_idx \
+in "$@"; do "node_$node_idx";done;fi;return 0;};choice() { local \
+initial_params=("${params[@]}") best_match_idx unmatched_count node_idx;: \
+$((testdepth++));for node_idx in "$@"; do if "node_$node_idx"; then if [[ -z \
+$unmatched_count || ${#params[@]} -lt $unmatched_count ]]; then
+best_match_idx=$node_idx;unmatched_count=${#params[@]};fi;fi
+params=("${initial_params[@]}");done;: $((testdepth--));if [[ -n \
+$best_match_idx ]]; then "node_$best_match_idx";return 0;fi;return 1;}
+optional() { local node_idx;for node_idx in "$@"; do "node_$node_idx";done
+return 0;};repeatable() { local matched=false remaining=${#params[@]};while \
+"node_$1"; do matched=true;[[ $remaining -eq ${#params[@]} ]] && break
+remaining=${#params[@]};done;if $matched; then return 0;fi;return 1;};switch() {
+local i param;for i in "${!params[@]}"; do local param=${params[$i]};if [[ \
+$param = "$2" || $param = "$2":* ]]; then params=("${params[@]:0:$i}" \
+"${params[@]:((i+1))}");[[ $testdepth -gt 0 ]] && return 0;if [[ $3 = true ]]; \
+then eval "((var_$1++))" || true;else eval "var_$1=true";fi;return 0;elif [[ \
+$param = a:* && $2 = a:* ]]; then return 1;fi;done;return 1;};value() { local \
+i param;for i in "${!params[@]}"; do local param=${params[$i]};if [[ $param = \
+"$2":* ]]; then params=("${params[@]:0:$i}" "${params[@]:((i+1))}");[[ \
+$testdepth -gt 0 ]] && return 0;local value;value=$(printf -- "%q" \
+"${param#*:}");if [[ $3 = true ]]; then eval "var_$1+=($value)";else eval \
+"var_$1=$value";fi;return 0;fi;done;return 1;};stdout() { printf -- "cat <<'EO'\
+'M'\n%s\nEOM\n" "$1";};stderr() { printf -- "cat <<'EOM' >&2\n%s\nEOM\n" "$1";}
+error() { [[ -n $1 ]] && stderr "$1";stderr "$usage";_return 1;};_return() {
+printf -- "exit %d\n" "$1";exit "$1";};set -e;trimmed_doc=${DOC:0:687}
+usage=${DOC:47:168};digest=6c903;options=('-h --help 0');node_0(){ switch \
+__help 0;};node_1(){ value _archive_ a;};node_2(){ value _path_ a true;}
+node_3(){ value _src_ a;};node_4(){ value _dest_ a;};node_5(){ switch backup \
+a:backup;};node_6(){ switch ls a:ls;};node_7(){ switch rm a:rm;};node_8(){
+switch restore a:restore;};node_9(){ sequence 6 10 11;};node_10(){ optional 1;}
+node_11(){ optional 12;};node_12(){ repeatable 2;};node_13(){ sequence 7 1;}
+node_14(){ sequence 8 1 3 4;};node_15(){ choice 5 9 13 14 0;};cat <<<' \
+docopt_exit() { [[ -n $1 ]] && printf "%s\n" "$1" >&2;printf "%s\n" \
+"${DOC:47:168}" >&2;exit 1;}';local varnames=(__help _archive_ _path_ _src_ \
+_dest_ backup ls rm restore) varname;for varname in "${varnames[@]}"; do unset \
+"var_$varname";done;parse 15 "$@";local p=${DOCOPT_PREFIX:-''};for varname in \
+"${varnames[@]}"; do unset "$p$varname";done;if declare -p var__path_ \
+>/dev/null 2>&1; then eval $p'_path_=("${var__path_[@]}")';else eval $p'_path_'\
+'=()';fi;eval $p'__help=${var___help:-false};'$p'_archive_=${var__archive_:-};'\
+$p'_src_=${var__src_:-};'$p'_dest_=${var__dest_:-};'$p'backup=${var_backup:-fa'\
+'lse};'$p'ls=${var_ls:-false};'$p'rm=${var_rm:-false};'$p'restore=${var_restor'\
+'e:-false};';local docopt_i=1;[[ $BASH_VERSION =~ ^4.3 ]] && docopt_i=2;for \
+((;docopt_i>0;docopt_i--)); do for varname in "${varnames[@]}"; do declare -p \
+"$p$varname";done;done;}
+# docopt parser above, complete command for generating this parser is `docopt.sh borg-backup`
+
+
+eval "$(docopt "$@")"
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ────────────────────────────────────────────────────────────────────────────────
+log() { echo "[$(date +%F\ %T)] $@"; }
+die() { log "ERROR: $@" >&2; exit 1; }
+run() { log "RUN: $@"; "$@"; }
+
+check_user_session() {
+  loginctl show-user "$USER" --property=State --value 2>/dev/null | grep -q "active" \
+    || die "No active user session found - backup requires user to be logged in"
+
+  return
+}
+
+check_gpg_agent() {
+  declare \
+    keygrips=($(gpg --list-secret-keys --with-keygrip --with-colons "$GPG_KEY_NAME" | awk -F: '/^grp:/ {print $10}')) \
+    keyinfo
+
+  [[ ${#keygrips[@]} -ge 2 ]] || die "GPG Key is missing!"
+
+  keyinfo=( $(gpg-connect-agent "keyinfo ${keygrips[1]}" /bye 2>/dev/null) )
+
+  [[ "${keyinfo[6]}" == '1' ]] || die "GPG passphrase not cached in agent"
+
+  return
+}
+
+get_smb_data() {
+  printf '%s' "$(pass show smb/data)"
+
+  return
+}
+
+get_repo_data() {
+  printf '%s' "$(pass show repo/data)"
+
+  return
+}
+
+make_repo_pass_file() {
+  declare \
+    pass_file="$(mktemp --tmpdir borg-backup.XXXXXX)"
+
+  chmod 600 "$pass_file"
+  get_repo_data | sed -n '2p' > "$pass_file"
+
+  echo "$pass_file"
+
+  return
+}
+
+check_already_running() {
+  mountpoint -q "$BORG_REPO" \
+    && die "Previous backup is still running" \
+    || return 0
+}
+
+check_network() {
+  ping -c 1 -W 2 "$SMB_SERVER" &>/dev/null || die "Backup server unreachable"
+
+  return
+}
+
+mount_smb() {
+  declare \
+    success=false \
+    creds_file="$HOME/.cache/borg-backup/smb-credentials" \
+    smb
+
+  mountpoint -q "$BORG_REPO" \
+    && return 0 \
+    || log "Mounting SMB:[$SMB_SERVER/$SMB_SHARE] for repo:[$BORG_REPO]"
+
+  mkdir -p "$(dirname $creds_file)"
+  touch "$creds_file"
+  chmod 600 "$creds_file"
+
+  smb=( $(get_smb_data) )
+  printf 'username=%s\npassword=%s\n' "${smb[2]}" "${smb[3]}" > "$creds_file"
+  unset smb
+
+  mount "$BORG_REPO" \
+    && success=true \
+    || success=false
+
+  rm -f "$creds_file"
+
+  if ! $success; then die "Failed to mount repo via SMB"; fi
+
+  return
+}
+
+unmount_smb() {
+  mountpoint -q "$BORG_REPO" \
+    && log "Unmounting repo:[$BORG_REPO]" \
+    || return 0
+
+  umount "$BORG_REPO" || die "Failed to unmount repo"
+
+  return
+}
+
+init_repo() {
+  declare \
+    success=false \
+    pass_file="$(make_repo_pass_file)"
+
+  if (BORG_PASSCOMMAND="cat $pass_file" borg list "$BORG_REPO" &>/dev/null) then
+    success=true
+
+  else
+    log "Initializing empty repo:[$BORG_REPO]"
+
+    (BORG_PASSCOMMAND="cat $pass_file" borg init --encryption=repokey --make-parent-dirs "$BORG_REPO") \
+      && success=true \
+      || success=false
+  fi
+
+  rm -f "$pass_file"
+
+  if ! $success; then die "Failed to initialize repo"; fi
+
+  return
+}
+
+build_excludes() {
+  declare \
+    file="$BORG_REPO/.excludes" \
+    exclude
+
+  echo "" > $file
+
+  [[ ${#EXCLUDES[@]} -ne 0 ]] || return 0
+
+  printf '%s\n' "${EXCLUDES[@]}" > $file
+
+  echo "$file"
+
+  return
+}
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Initialization
+# ────────────────────────────────────────────────────────────────────────────────
+check_user_session
+check_gpg_agent
+
+[[ -r $CONFIG_FILE ]] && source $CONFIG_FILE || die "Config file:[$CONFIG_FILE] not found or parse error"
+INCLUDES=( ${INCLUDES//,/ } )
+EXCLUDES=( ${EXCLUDES//,/ } )
+
+SMB=( $(get_smb_data) )
+SMB_SERVER="${SMB[0]}"
+SMB_SHARE="${SMB[1]}"
+unset SMB
+
+BORG=( $(get_repo_data) )
+BORG_REPO="${BORG[0]}"
+unset BORG
+
+check_already_running
+check_network
+mount_smb
+trap unmount_smb EXIT
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Commands
+# ────────────────────────────────────────────────────────────────────────────────
+make_backup() {
+  declare \
+    success=false \
+    options excludes pass_file
+
+  init_repo
+
+  options=(
+    # "--dry-run"
+    # "--list"
+    # "--progress"
+    "--numeric-ids"
+    "--one-file-system"
+    "--compression=auto,lzma,6" # borg help compression
+  )
+
+  excludes="$(build_excludes)"
+  [[ -n $excludes ]] && options+=( "--exclude-from=$excludes" )
+
+  pass_file="$(make_repo_pass_file)"
+
+  ( \
+    export BORG_PASSCOMMAND="cat $pass_file"; \
+    run borg create ${options[*]} "$BORG_REPO::{now}" ${INCLUDES[*]} \
+    && run borg prune --keep-daily=30 "$BORG_REPO" \
+  ) \
+    && success=true \
+    || success=false
+
+  rm -f "$pass_file"
+
+  if ! $success; then die "Borg failed"; fi
+
+  return
+}
+
+ls_backups() {
+  declare \
+    success=false \
+    target="$BORG_REPO" \
+    pass_file="$(make_repo_pass_file)"
+
+  [[ -n $_archive_ ]] && target+="::$_archive_"
+
+  (BORG_PASSCOMMAND="cat $pass_file" run borg list "$target" "${_path_[@]}") \
+    && success=true \
+    || success=false
+
+  rm -f "$pass_file"
+
+  if ! $success; then die "Unable to list backups"; fi
+
+  return
+}
+
+remove_backup() {
+  declare \
+    success=false \
+    pass_file="$(make_repo_pass_file)"
+
+  (BORG_PASSCOMMAND="cat $pass_file" run borg delete "$BORG_REPO::$_archive_") \
+    && success=true \
+    || success=false
+
+  rm -f "$pass_file"
+
+  if ! $success; then die "Unable to remove backup"; fi
+
+  return
+}
+
+restore_from_backup() {
+  declare \
+    success=false \
+    pass_file
+
+  [[ -d "$_dest_" ]] || mkdir -p "$_dest_" || die "Invalid destination"
+
+  pass_file="$(make_repo_pass_file)"
+
+  (cd "$_dest_"; BORG_PASSCOMMAND="cat $pass_file" run borg extract --progress "$BORG_REPO::$_archive_" "$_src_") \
+    && success=true \
+    || success=false
+
+  rm -f "$pass_file"
+
+  if ! $success; then die "Unable to restore"; fi
+
+  return
+}
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Dispatch
+# ────────────────────────────────────────────────────────────────────────────────
+if $backup; then
+  make_backup
+
+elif $ls; then
+  ls_backups
+
+elif $rm; then
+  remove_backup
+
+elif $restore; then
+  restore_from_backup
+
+fi
+
+
+exit
+

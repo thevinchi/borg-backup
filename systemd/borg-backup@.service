@@ -1,0 +1,10 @@
+[Unit]
+Description=Borg Backup for %i
+ConditionUser=%i
+
+[Service]
+Type=oneshot
+ExecStart=/home/%i/.local/bin/borg-backup backup
+StandardOutput=journal
+StandardError=journal
+

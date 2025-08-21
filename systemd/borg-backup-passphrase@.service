@@ -1,0 +1,13 @@
+[Unit]
+Description=Borg Backup Passphrase Mgmt for %i
+PartOf=default.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+ExecStart=/bin/true
+ExecStop=/home/%i/.local/bin/borg-backup-passphrase clear
+
+[Install]
+WantedBy=default.target
+

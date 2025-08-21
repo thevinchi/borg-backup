@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+set -e
+
+
+ACTION="$1"
+KEY_NAME="$USER@borg-backup"
+CONFIG_FILE="$HOME/.config/borg-backup/borg-backup.conf"
+CACHE_TTL=34560000
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Commands
+# ────────────────────────────────────────────────────────────────────────────────
+cache_passphrase() {
+  declare \
+    keygrip gpg_preset_passphrase passphrase
+
+  if ! grep -q "allow-preset-passphrase" "$HOME/.gnupg/gpg-agent.conf" 2>/dev/null; then
+    printf 'allow-preset-passphrase\nmax-cache-ttl %s\ n' $CACHE_TTL >> "$HOME/.gnupg/gpg-agent.conf"
+    gpg-connect-agent reloadagent /bye 1>/dev/null
+  fi
+
+  keygrip=$(gpg --list-secret-keys --with-keygrip --with-colons "$KEY_NAME" \
+    | awk -F: '/^grp:/ {print $10}' | sed -n '2p')
+
+  [[ "$(gpg-connect-agent "keyinfo $keygrip" /bye 2>/dev/null | awk 'NR==1 {print $7}')" != '1' ]] \
+    || return 0
+
+  gpg_preset_passphrase="$(gpgconf --list-dirs libexecdir)/gpg-preset-passphrase"
+  [[ -x "$gpg_preset_passphrase" ]] || return 1
+
+  printf "\nGPG passphrase needed to unlock $KEY_NAME key for this login session\n"
+  if IFS= read -srp "Enter passphrase: " passphrase; then
+    "$gpg_preset_passphrase" --preset "$keygrip" <<< "$passphrase" && echo || {
+      printf "\nFailed to cache passphrase!\n" >&2
+      printf "\nBackups will not be able to run unattended during this user session.\n" >&2
+    }
+  fi
+  unset passphrase
+
+  return
+}
+
+clear_passphrase(){
+  declare \
+    keygrips keygrip
+
+  keygrips=( $(gpg --list-secret-keys --with-keygrip --with-colons "$KEY_NAME" | awk -F: '/^grp:/ {print $10}') )
+  keygrip="${keygrips[1]}"
+
+  gpg-connect-agent "clear_passphrase $keygrip" /bye 1>/dev/null
+
+  return
+}
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Dispatch
+# ────────────────────────────────────────────────────────────────────────────────
+[[ -r "$CONFIG_FILE" ]] || exit 0
+
+case $ACTION in
+  'cache') cache_passphrase;;
+  'clear') clear_passphrase;;
+esac
+
+
+exit
