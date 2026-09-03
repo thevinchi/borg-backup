@@ -16,6 +16,7 @@ Usage:
   borg-backup ls [<archive>] [<path>...]
   borg-backup rm <archive>
   borg-backup restore <archive> <src> <dest>
+  borg-backup exec <arg>...
   borg-backup (-h | --help)
 
 Commands:
@@ -23,18 +24,21 @@ Commands:
   ls                  List archives or archive contents
   rm                  Remove an archive
   restore             Restore files from an archive
+  exec                Run any borg command against the mounted repo
 
 Arguments:
   <archive>           Archive name
   <path>              Filter items in <archive> by path
   <src>               Source path to restore
   <dest>              Destination path for restore
+  <arg>               Passed to borg as-is. BORG_REPO is set, so the repo can
+                      be omitted: exec info, exec check, exec list ::ARCHIVE
 
 Options:
   -h --help           Show this help message and exit
 "
 # docopt parser below, refresh this parser with `docopt.sh borg-backup`
-# shellcheck disable=2016,2086,2317,1075,2154
+# shellcheck disable=2016,2086,2329,1075,2154
 docopt() { parse() { if ${DOCOPT_DOC_CHECK:-true}; then local doc_hash;if \
 doc_hash=$(printf "%s" "$DOC" | (sha256sum 2>/dev/null || shasum -a 256)); then
 if [[ ${doc_hash:0:5} != "$digest" ]]; then stderr "The current usage doc \
@@ -98,29 +102,34 @@ $testdepth -gt 0 ]] && return 0;local value;value=$(printf -- "%q" \
 "var_$1=$value";fi;return 0;fi;done;return 1;};stdout() { printf -- "cat <<'EO'\
 'M'\n%s\nEOM\n" "$1";};stderr() { printf -- "cat <<'EOM' >&2\n%s\nEOM\n" "$1";}
 error() { [[ -n $1 ]] && stderr "$1";stderr "$usage";_return 1;};_return() {
-printf -- "exit %d\n" "$1";exit "$1";};set -e;trimmed_doc=${DOC:0:687}
-usage=${DOC:47:168};digest=6c903;options=('-h --help 0');node_0(){ switch \
+printf -- "exit %d\n" "$1";exit "$1";};set -e;trimmed_doc=${DOC:0:938}
+usage=${DOC:47:196};digest=3ef42;options=('-h --help 0');node_0(){ switch \
 __help 0;};node_1(){ value _archive_ a;};node_2(){ value _path_ a true;}
-node_3(){ value _src_ a;};node_4(){ value _dest_ a;};node_5(){ switch backup \
-a:backup;};node_6(){ switch ls a:ls;};node_7(){ switch rm a:rm;};node_8(){
-switch restore a:restore;};node_9(){ sequence 6 10 11;};node_10(){ optional 1;}
-node_11(){ optional 12;};node_12(){ repeatable 2;};node_13(){ sequence 7 1;}
-node_14(){ sequence 8 1 3 4;};node_15(){ choice 5 9 13 14 0;};cat <<<' \
-docopt_exit() { [[ -n $1 ]] && printf "%s\n" "$1" >&2;printf "%s\n" \
-"${DOC:47:168}" >&2;exit 1;}';local varnames=(__help _archive_ _path_ _src_ \
-_dest_ backup ls rm restore) varname;for varname in "${varnames[@]}"; do unset \
-"var_$varname";done;parse 15 "$@";local p=${DOCOPT_PREFIX:-''};for varname in \
-"${varnames[@]}"; do unset "$p$varname";done;if declare -p var__path_ \
->/dev/null 2>&1; then eval $p'_path_=("${var__path_[@]}")';else eval $p'_path_'\
-'=()';fi;eval $p'__help=${var___help:-false};'$p'_archive_=${var__archive_:-};'\
-$p'_src_=${var__src_:-};'$p'_dest_=${var__dest_:-};'$p'backup=${var_backup:-fa'\
-'lse};'$p'ls=${var_ls:-false};'$p'rm=${var_rm:-false};'$p'restore=${var_restor'\
-'e:-false};';local docopt_i=1;[[ $BASH_VERSION =~ ^4.3 ]] && docopt_i=2;for \
-((;docopt_i>0;docopt_i--)); do for varname in "${varnames[@]}"; do declare -p \
-"$p$varname";done;done;}
+node_3(){ value _src_ a;};node_4(){ value _dest_ a;};node_5(){ value _arg_ a \
+true;};node_6(){ switch backup a:backup;};node_7(){ switch ls a:ls;};node_8(){
+switch rm a:rm;};node_9(){ switch restore a:restore;};node_10(){ switch exec \
+a:exec;};node_11(){ sequence 7 12 13;};node_12(){ optional 1;};node_13(){
+optional 14;};node_14(){ repeatable 2;};node_15(){ sequence 8 1;};node_16(){
+sequence 9 1 3 4;};node_17(){ sequence 10 18;};node_18(){ repeatable 5;}
+node_19(){ choice 6 11 15 16 17 0;};cat <<<' docopt_exit() { [[ -n $1 ]] && \
+printf "%s\n" "$1" >&2;printf "%s\n" "${DOC:47:196}" >&2;exit 1;}';local \
+varnames=(__help _archive_ _path_ _src_ _dest_ _arg_ backup ls rm restore \
+exec) varname;for varname in "${varnames[@]}"; do unset "var_$varname";done
+parse 19 "$@";local p=${DOCOPT_PREFIX:-''};for varname in "${varnames[@]}"; do
+unset "$p$varname";done;if declare -p var__path_ >/dev/null 2>&1; then eval \
+$p'_path_=("${var__path_[@]}")';else eval $p'_path_=()';fi;if declare -p \
+var__arg_ >/dev/null 2>&1; then eval $p'_arg_=("${var__arg_[@]}")';else eval \
+$p'_arg_=()';fi;eval $p'__help=${var___help:-false};'$p'_archive_=${var__archi'\
+'ve_:-};'$p'_src_=${var__src_:-};'$p'_dest_=${var__dest_:-};'$p'backup=${var_b'\
+'ackup:-false};'$p'ls=${var_ls:-false};'$p'rm=${var_rm:-false};'$p'restore=${v'\
+'ar_restore:-false};'$p'exec=${var_exec:-false};';local docopt_i=1;[[ \
+$BASH_VERSION =~ ^4.3 ]] && docopt_i=2;for ((;docopt_i>0;docopt_i--)); do for \
+varname in "${varnames[@]}"; do declare -p "$p$varname";done;done;}
 # docopt parser above, complete command for generating this parser is `docopt.sh borg-backup`
 
 
+# Everything after the command is positional, so borg options reach exec.
+DOCOPT_OPTIONS_FIRST=true
 eval "$(docopt "$@")"
 
 
@@ -390,6 +399,23 @@ restore_from_backup() {
 }
 
 
+exec_borg() {
+  declare \
+    success=false \
+    pass_file="$(make_repo_pass_file)"
+
+  (export BORG_REPO BORG_PASSCOMMAND="cat $pass_file"; run borg "${_arg_[@]}") \
+    && success=true \
+    || success=false
+
+  rm -f "$pass_file"
+
+  if ! $success; then die "borg ${_arg_[0]} failed"; fi
+
+  return
+}
+
+
 # ────────────────────────────────────────────────────────────────────────────────
 # Dispatch
 # ────────────────────────────────────────────────────────────────────────────────
@@ -404,6 +430,9 @@ elif $rm; then
 
 elif $restore; then
   restore_from_backup
+
+elif $exec; then
+  exec_borg
 
 fi
 
