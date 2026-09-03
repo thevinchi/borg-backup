@@ -316,10 +316,13 @@ make_backup() {
 
   pass_file="$(make_repo_pass_file)"
 
+  # borg exits 1 for warnings ("file changed while we backed it up"), 2 for
+  # errors; the archive is complete either way, so only 2 skips the prune.
   ( \
     export BORG_PASSCOMMAND="cat $pass_file"; \
-    run borg create ${options[*]} "$BORG_REPO::{now}" ${INCLUDES[*]} \
-    && run borg prune --keep-daily=30 "$BORG_REPO" \
+    rc=0; run borg create ${options[*]} "$BORG_REPO::{now}" ${INCLUDES[*]} || rc=$?; \
+    [[ $rc -le 1 ]] \
+    && run borg prune --keep-hourly 24 --keep-daily=30 "$BORG_REPO" \
   ) \
     && success=true \
     || success=false
